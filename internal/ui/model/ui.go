@@ -341,6 +341,7 @@ type UI struct {
 	// workspace_cache.go).
 	agentBusyCache    ttlCache
 	permModeCache     modeTTLCache
+	agentModelCache   modelTTLCache
 	busyFetchInFlight bool
 	// busyFetchGen is bumped by every busy/permission state transition;
 	// like promptQueueGen it lets a stale in-flight probe result be
@@ -448,11 +449,14 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		ui.themeKey = styles.ThemeKeyForProvider(cfg.Models[config.SelectedModelTypeLarge].Provider)
 	}
 
-	// Seed the permission-mode cache once at construction; afterwards it is
-	// kept fresh by write-through toggles and off-thread refreshes so Update
-	// and View never probe the workspace synchronously.
+	// Seed the permission-mode and agent-model caches once at construction;
+	// afterwards they are kept fresh by write-throughs and off-thread
+	// refreshes so Update and View never probe the workspace synchronously.
 	ui.permModeCache.set(com.Workspace.PermissionMode())
 	ui.setEditorPrompt(com.Workspace.PermissionMode())
+	if com.Workspace.AgentIsReady() {
+		ui.agentModelCache.set(com.Workspace.AgentModel(), true)
+	}
 	ui.randomizePlaceholders()
 	ui.textarea.Placeholder = ui.readyPlaceholder
 	ui.status = status
@@ -1282,8 +1286,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, clearInfoMsgCmd(ttl))
 	case modelChangedMsg:
-		// The agent model has finished updating. Switching models is a fresh
-		// trigger, so re-surface the context advisory.
+		// The agent model has finished updating. Invalidate the cache so
+		// the next busy refresh picks up the new model, then re-surface
+		// the context advisory.
+		m.agentModelCache.invalidate()
 		m.retriggerSystemMessage(chat.SystemMessageContextWarning)
 		cmds = append(cmds, util.CmdHandler(util.NewInfoMsg(msg.info)))
 	case app.UpdateAvailableMsg:

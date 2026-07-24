@@ -9,14 +9,15 @@ import (
 	"github.com/charmbracelet/ultraviolet/layout"
 )
 
-// selectedLargeModel returns the currently selected large language model from
-// the agent coordinator, if one exists.
+// selectedLargeModel returns the currently selected large language model,
+// served from the memoized cache so render paths never probe the workspace
+// synchronously.
 func (m *UI) selectedLargeModel() *workspace.AgentModel {
-	if m.com.Workspace.AgentIsReady() {
-		model := m.com.Workspace.AgentModel()
-		return &model
+	if !m.agentModelCache.ready {
+		return nil
 	}
-	return nil
+	model := m.agentModelCache.val
+	return &model
 }
 
 // landingView renders the landing page view showing the current working

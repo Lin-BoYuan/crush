@@ -27,6 +27,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/workspace"
 )
 
 // busyCacheTTL bounds how long the memoized busy/permission state may go
@@ -83,16 +84,46 @@ func (c *modeTTLCache) invalidate() {
 	c.at = time.Time{}
 }
 
-// busyStateMsg delivers the result of an off-thread busy/permission probe.
+// modelTTLCache memoizes one agent-model workspace probe result. The model
+// changes rarely (explicit picker selection or initial setup), so a long TTL
+// is fine; write-through on modelChangedMsg keeps it exact.
+type modelTTLCache struct {
+	val   workspace.AgentModel
+	ready bool
+	at    time.Time
+}
+
+// fresh reports whether the cached value is within its TTL.
+func (c *modelTTLCache) fresh(ttl time.Duration) bool {
+	return !c.at.IsZero() && time.Since(c.at) < ttl
+}
+
+// set writes a known-good value through the cache.
+func (c *modelTTLCache) set(val workspace.AgentModel, ready bool) {
+	c.val = val
+	c.ready = ready
+	c.at = time.Now()
+}
+
+// invalidate marks the value stale so the next Update-tail backstop
+// re-probes; the last value keeps being served in the meantime.
+func (c *modelTTLCache) invalidate() {
+	c.at = time.Time{}
+}
+
+// busyStateMsg delivers the result of an off-thread busy/permission/model
+// probe.
 type busyStateMsg struct {
 	// gen is the busy generation captured when the probe was dispatched.
 	// A result whose generation no longer matches m.busyFetchGen started
 	// before a newer state transition (optimistic send, invalidation,
 	// session switch, ...) and is discarded, then re-fetched, so the
 	// authoritative refresh is never lost to an older in-flight request.
-	gen       uint64
-	agentBusy bool
-	permMode  permission.PermissionMode
+	gen        uint64
+	agentBusy  bool
+	agentReady bool
+	permMode   permission.PermissionMode
+	model      workspace.AgentModel
 }
 
 // promptQueueMsg delivers the queued prompts fetched off-thread.
@@ -151,8 +182,10 @@ func (m *UI) dispatchBusyRefresh() tea.Cmd {
 	gen := m.busyFetchGen
 	return func() tea.Msg {
 		st := busyStateMsg{gen: gen}
-		if ws.AgentIsReady() {
+		st.agentReady = ws.AgentIsReady()
+		if st.agentReady {
 			st.agentBusy = ws.AgentIsBusy()
+			st.model = ws.AgentModel()
 		}
 		st.permMode = ws.PermissionMode()
 		return st
@@ -177,6 +210,7 @@ func (m *UI) applyBusyState(msg busyStateMsg) []tea.Cmd {
 	prevMode := m.permModeCached()
 	m.agentBusyCache.set(msg.agentBusy)
 	m.permModeCache.set(msg.permMode)
+	m.agentModelCache.set(msg.model, msg.agentReady)
 	if prevMode != msg.permMode {
 		// A remote/async toggle changed the permission mode: update the
 		// editor prompt function so the prompt icon/style tracks the new
@@ -270,7 +304,7 @@ func (m *UI) staleWorkspaceRefreshCmds() []tea.Cmd {
 		return nil
 	}
 	var cmds []tea.Cmd
-	if !m.agentBusyCache.fresh(busyCacheTTL) || !m.permModeCache.fresh(busyCacheTTL) {
+	if !m.agentBusyCache.fresh(busyCacheTTL) || !m.permModeCache.fresh(busyCacheTTL) || !m.agentModelCache.fresh(busyCacheTTL) {
 		if cmd := m.dispatchBusyRefresh(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}

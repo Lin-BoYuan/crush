@@ -47,6 +47,8 @@ type countingWorkspace struct {
 func (w *countingWorkspace) AgentIsReady() bool { w.readyCalls++; return w.ready }
 func (w *countingWorkspace) AgentIsBusy() bool  { w.agentBusyCalls++; return w.agentBusy }
 
+func (w *countingWorkspace) AgentModel() workspace.AgentModel { return workspace.AgentModel{} }
+
 func (w *countingWorkspace) AgentReadyErr() error {
 	w.readyCalls++
 	if w.ready {
@@ -140,6 +142,7 @@ func pinTTLs(t *testing.T) {
 func warmCaches(m *UI, busy bool) {
 	m.agentBusyCache.set(busy)
 	m.permModeCache.set(permission.PermissionModeNormal)
+	m.agentModelCache.set(workspace.AgentModel{}, true)
 	m.promptQueueCheckedAt = time.Now()
 }
 
