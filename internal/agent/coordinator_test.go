@@ -13,6 +13,7 @@ import (
 	"charm.land/fantasy/providers/bedrock"
 	"charm.land/fantasy/providers/openaicompat"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/discover"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -560,6 +561,38 @@ func TestIsUnauthorized(t *testing.T) {
 	})
 }
 
+func TestGetProviderOptionsReasoningEffortCustomProvider(t *testing.T) {
+	// Custom local providers (lmstudio, ollama, omlx, litellm, llamacpp)
+	// go through the OpenAI-compat client and must receive the selected
+	// reasoning effort like any other OpenAI-compatible provider.
+	for _, providerType := range discover.RegisteredProviderTypes() {
+		t.Run(providerType, func(t *testing.T) {
+			model := Model{
+				CatwalkCfg: catwalk.Model{
+					ID:              "qwen/qwen3-8b",
+					CanReason:       true,
+					ReasoningLevels: []string{"low", "medium", "high"},
+				},
+				ModelCfg: config.SelectedModel{
+					Provider:        "local",
+					Model:           "qwen/qwen3-8b",
+					ReasoningEffort: "high",
+				},
+			}
+			providerCfg := config.ProviderConfig{ID: "local", Type: catwalk.Type(providerType)}
+
+			opts := getProviderOptions(model, providerCfg)
+
+			raw, ok := opts[openaicompat.Name]
+			require.True(t, ok, "options should be keyed under openaicompat.Name for type %q", providerType)
+			parsed, ok := raw.(*openaicompat.ProviderOptions)
+			require.True(t, ok)
+			require.NotNil(t, parsed.ReasoningEffort)
+			assert.Equal(t, "high", string(*parsed.ReasoningEffort))
+		})
+	}
+}
+
 func TestGetProviderOptionsReasoningEffortFallback(t *testing.T) {
 	model := Model{
 		CatwalkCfg: catwalk.Model{
@@ -757,3 +790,35 @@ func TestCallTopK(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestCoordinatorSetMainAgent(t *testing.T) {
+	t.Run("switches current agent", func(t *testing.T) {
+		coder := &mockSessionAgent{}
+		plan := &mockSessionAgent{}
+		coord := &coordinator{
+			mainAgent:     coder,
+			mainAgentName: config.AgentCoder,
+			agents: map[string]SessionAgent{
+				config.AgentCoder: coder,
+				config.AgentPlan:  plan,
+			},
+		}
+
+		err := coord.SetMainAgent(config.AgentPlan)
+		require.NoError(t, err)
+		assert.Equal(t, config.AgentPlan, coord.mainAgentName)
+		assert.Same(t, plan, coord.mainAgent)
+	})
+
+	t.Run("returns error for unknown agent", func(t *testing.T) {
+		coord := &coordinator{
+			agents: map[string]SessionAgent{
+				config.AgentCoder: &mockSessionAgent{},
+			},
+		}
+
+		err := coord.SetMainAgent("unknown")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errMainAgentNotFound)
+	})
+}
